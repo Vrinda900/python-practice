@@ -1,35 +1,39 @@
-from fastapi import FastAPI,Path, HTTPException, Query
+from fastapi import FastAPI,Path, HTTPException,Query,Depends
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel,Field,computed_field
+from pydantic import BaseModel,Field,computed_field,ConfigDict
 from typing import Annotated,Literal,Optional
-import sqlite3
-
-DB_File="patient.db"
-def get_connection():
-    conn=sqlite3.connect(DB_File)
-    conn.row_factory=sqlite3.Row     
-    return conn
-
-def create_table():
-    conn=get_connection()
-    conn.execute("""CREATE TABLE IF NOT EXISTS patient(
-    id TEXT PRIMARY KEY,
-    name TEXT,
-    city TEXT,
-    age INTEGER,
-    gender TEXT,
-    height REAL,
-    weight REAL
-)
-""")  
-    conn.commit()
-    conn.close()
-    
-create_table() 
+from sqlalchemy import create_engine, Column, String,Integer,Float
+from sqlalchemy.orm import sessionmaker, declarative_base,Session
+from sqlalchemy.exc import IntegrityError
 
 app=FastAPI()
 
+DB_URL="sqlite:///patient.db"
+engine=create_engine(DB_URL,connect_args={"check_same_thread":False})
+sessionLocal=sessionmaker(bind=engine)
+Base=declarative_base()
+
+class PatientDB(Base):
+    __tablename__="patient"
+    id=Column(String,primary_key=True)
+    name=Column(String)
+    city=Column(String)
+    age =Column(Integer)
+    gender=Column(String)
+    height=Column(Float)
+    weight=Column(Float)
+
+Base.metadata.create_all(bind=engine)
+
+def get_db():
+    db=sessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
 class Patient(BaseModel):
+    model_config=ConfigDict(from_attributes=True)
     id:Annotated[str,Field(...,description='ID of the patient', examples=['P001'])]
     name:Annotated[str,Field(...,description='Name of the patient')]
     city:Annotated[str,Field(...,description='City where the patient is living')]
@@ -74,29 +78,23 @@ def about():
     return {"message":"A fully functional API to manage your patient records"}
 
 @app.get("/view")
-def view():
-    conn=get_connection()
-    rows= conn.execute("SELECT * FROM patient").fetchall()
-    conn.close()
-    result={}
-    for row in rows:
-        patient=Patient(**dict(row))
-        result[patient.id]=patient.model_dump(exclude={'id'})
-    return result
+def view(db:Session=Depends(get_db)):
+    rows=db.query(PatientDB).all()
+    return [Patient.model_validate(row).model_dump(exclude={'id'}) for row in rows]
 
 @app.get("/patient/{patient_id}")
-def view_patient(patient_id:str=Path(...,description='ID of the patient in the DB',example='P001')):
-    conn=get_connection()
-    row= conn.execute("SELECT * FROM patient WHERE id = ?", (patient_id,)).fetchone()
-    conn.close()
-    if row is None:
+def view_patient(patient_id:str=Path(...,description='ID of the patient in the DB',example='P001'),db:Session=Depends(get_db)):
+    row=db.query(PatientDB).filter(PatientDB.id==patient_id).first()
+    if not row:
         raise HTTPException(status_code=404,detail='patient not found')
-    patient = Patient(**dict(row))
-    return patient.model_dump(exclude={'id'})      
+    return Patient.model_validate(row).model_dump(exclude={'id'})    
 
 @app.get('/sort')
-def sort_patients(sort_by:str =Query(...,description='Sort on the basis of height, weight or bmi'),order:str=Query('asc',description='Sort in asc or desc order')):
-    sort_columns={"height": "height","weight": "weight","bmi": "weight/(height*height)"}
+def sort_patients(sort_by:str =Query(...,description='Sort on the basis of height, weight or bmi'),order:str=Query('asc',description='Sort in asc or desc order'),db:Session=Depends(get_db)):
+    sort_columns={
+        "height": PatientDB.height,
+        "weight": PatientDB.weight,
+        "bmi": PatientDB.weight/(PatientDB.height*PatientDB.height)}
 
     if sort_by not in sort_columns:
         raise HTTPException(status_code=400,detail=f'Invalid field select from {list(sort_columns)}')
@@ -104,53 +102,40 @@ def sort_patients(sort_by:str =Query(...,description='Sort on the basis of heigh
     if order not in ['asc','desc']:
         raise HTTPException(status_code=400,detail=f'Invalid order select between asc and desc')
     
-    odr="DESC" if order=="desc" else "ASC"
-    conn= get_connection()
-    rows= conn.execute(f"SELECT * FROM patient ORDER BY {sort_columns[sort_by]} {odr}").fetchall()
-    conn.close()
-    result={}
-    for row in rows:
-        patient=Patient(**dict(row))
-        result[patient.id]=patient.model_dump(exclude={'id'})
-    return result
+    column = sort_columns[sort_by]
+    column = column.desc() if order == "desc" else column.asc()
+    rows = db.query(PatientDB).order_by(column).all()
+    return [Patient.model_validate(row).model_dump(exclude={'id'}) for row in rows]
 
 @app.post('/create')
-def create_patient(patient:Patient):
-    conn=get_connection()
+def create_patient(patient:Patient,db:Session=Depends(get_db)):
+    new_patient=PatientDB(**patient.model_dump(exclude={"bmi", "verdict"}))
+    db.add(new_patient)
     try:
-        conn.execute("INSERT INTO patient(id,name,city,age,gender,height,weight) VALUES (?,?,?,?,?,?,?)",(patient.id,patient.name,patient.city,patient.age,patient.gender,patient.height,patient.weight))
-        conn.commit()
-    except sqlite3.IntegrityError:
-        raise HTTPException(status_code=400,detail='Patient already exists')
-    finally:
-        conn.close()
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=400, detail='Patient already exists')
     return JSONResponse(status_code=201,content={'message':'patient created successfully'})
 
 @app.put('/edit/{patient_id}')
-def update_patient(patient_id:str,patient_update:PatientUpdate):
-    conn=get_connection()
-    try:
-        row=conn.execute("SELECT * FROM patient WHERE id = ?", (patient_id,)).fetchone()
-        if row is None:
-            raise HTTPException(status_code=404,detail='patient not found')
-    finally:
-        conn.close()
-    merged=dict(row)
+def update_patient(patient_id:str,patient_update:PatientUpdate,db:Session=Depends(get_db)):
+    row=db.query(PatientDB).filter(PatientDB.id==patient_id).first()
+    if not row:
+        raise HTTPException(status_code=404,detail='patient not found')
+    merged=Patient.model_validate(row).model_dump(exclude={"bmi","verdict"})
     merged.update(patient_update.model_dump(exclude_unset=True))
-    p=Patient(**merged)
-    conn=get_connection()
-    conn.execute("UPDATE patient SET name=? , city=? , age=?, gender=? , height=? , weight=? WHERE id=?",(p.name,p.city,p.age,p.gender,p.height,p.weight,patient_id))    
-    conn.commit()
-    conn.close()
+    p=Patient(**merged) 
+    for field in ("name", "city", "age", "gender", "height", "weight"):
+        setattr(row, field, getattr(p, field))
+    db.commit()
     return JSONResponse(status_code=200,content={'message':'patient updated successfully'})
 
 @app.delete('/delete/{patient_id}')
-def delete_patient(patient_id:str):
-    conn=get_connection()
-    cursor=conn.execute("DELETE FROM patient WHERE id = ?", (patient_id,))
-    conn.commit()
-    deleted=cursor.rowcount
-    conn.close()
-    if deleted==0:
+def delete_patient(patient_id:str,db:Session=Depends(get_db)):
+    row=db.query(PatientDB).filter(PatientDB.id==patient_id).first()
+    if not row:
         raise HTTPException(status_code=404,detail='patient not found')
+    db.delete(row)
+    db.commit()
     return JSONResponse(status_code=200,content={'message':'patient deleted successfully'})
