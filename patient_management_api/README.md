@@ -1,6 +1,6 @@
 # Patient Management API
 
-A REST API built with FastAPI to manage patient records. Data is stored in a JSON file, and BMI and a health verdict are calculated automatically.
+A REST API built with FastAPI to manage patient records. Data is stored in a SQLite, and BMI and a health verdict are calculated automatically.
 
 ## Features
 - Create, view, update and delete patient records
@@ -50,6 +50,3 @@ Then open http://127.0.0.1:8000/docs to try the endpoints.
 
 ## Tech used
 Python, FastAPI, Pydantic
-
-## Note
-`patient.json` contains made-up sample data only.
