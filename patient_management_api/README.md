@@ -21,6 +21,8 @@ A REST API built with FastAPI to manage patient records. Data is stored in a SQL
 | POST | `/create` | Add a new patient |
 | PUT | `/edit/{patient_id}` | Update a patient |
 | DELETE | `/delete/{patient_id}` | Delete a patient |
+| GET | `/search` | Filter by `city` , `gender`, `min_age`, `max_age`, `verdict`. Filters can be combined, e.g. `/search?city=Delhi&min_age=25` |
+
 
 ## Sample patient
 

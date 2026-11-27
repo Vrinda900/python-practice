@@ -2,7 +2,7 @@ from fastapi import APIRouter,Path, HTTPException,Query,Depends
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
-
+from typing import Optional, Literal
 from database import get_db
 from models import PatientDB
 from schemas import Patient, PatientUpdate
@@ -72,3 +72,25 @@ def delete_patient(patient_id:str,db:Session=Depends(get_db)):
     db.delete(row)
     db.commit()
     return JSONResponse(status_code=200,content={'message':'patient deleted successfully'})
+
+@router.get('/search')
+def search_patient(city:Optional[str]=Query(None,min_length=1, description='City to search for'),gender: Optional[Literal['male', 'female', 'other']]=Query(None),
+    min_age:Optional[int]=Query(None, gt=0, lt=120),
+    max_age:Optional[int]=Query(None, gt=0, lt=120),
+    verdict:Optional[Literal['Underweight', 'Normal', 'Overweight', 'Obese']]=Query(None),db: Session=Depends(get_db)):
+    if min_age is not None and max_age is not None and min_age > max_age:
+        raise HTTPException(status_code=400, detail='min_age cannot be greater than max_age')
+
+    query=db.query(PatientDB)
+    if city is not None:
+        query=query.filter(PatientDB.city.ilike(f"%{city}%"))
+    if gender is not None:
+        query=query.filter(PatientDB.gender==gender)         
+    if min_age is not None:
+        query=query.filter(PatientDB.age>=min_age)
+    if max_age is not None:
+        query=query.filter(PatientDB.age<=max_age)          
+    patients = [Patient.model_validate(row) for row in query.all()]
+    if verdict is not None:
+        patients=[p for p in patients if p.verdict== verdict]    
+    return [p.model_dump() for p in patients]
