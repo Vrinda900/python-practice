@@ -1,6 +1,6 @@
 # Patient Management API
 
-A REST API built with FastAPI to manage patient records. Data is stored in a SQLite, and BMI and a health verdict are calculated automatically.
+A REST API built with FastAPI to manage patient records. Data is stored in a SQLite database accessed through SQLAlchemy, and BMI and a health verdict are calculated automatically.
 
 ## Features
 - Create, view, update and delete patient records
@@ -17,10 +17,12 @@ A REST API built with FastAPI to manage patient records. Data is stored in a SQL
 | GET | `/about` | About the API |
 | GET | `/view` | View all patients |
 | GET | `/patient/{patient_id}` | View one patient |
-| GET | `/sort?sort_by=bmi&order=desc` | Sort by height, weight or bmi and order by asc or desc|
+| GET | `/sort?sort_by=bmi&order=desc` | Sort by height, weight or bmi and order by asc or desc |
 | POST | `/create` | Add a new patient |
 | PUT | `/edit/{patient_id}` | Update a patient |
 | DELETE | `/delete/{patient_id}` | Delete a patient |
+| GET | `/search` | Filter by `city` , `gender`, `min_age`, `max_age`, `verdict`. Filters can be combined, e.g. `/search?city=Delhi&min_age=25` |
+
 
 ## Sample patient
 
@@ -45,8 +47,21 @@ python -m venv venv
 venv\Scripts\activate
 fastapi dev main.py
 ```
+Run these from inside the `patient_management_api` folder. The SQLite database (`patient.db`) is created automatically on the first run.
 
 Then open http://127.0.0.1:8000/docs to try the endpoints.
 
 ## Tech used
-Python, FastAPI, Pydantic
+Python, FastAPI, Pydantic, SQLite, SQLAlchemy
+
+## Project structure
+
+```
+patient_management_api/
+├── main.py            # creates the app and includes the router
+├── database.py        # engine, session and get_db dependency
+├── models.py          # SQLAlchemy table (PatientDB)
+├── schemas.py         # Pydantic models (Patient, PatientUpdate)
+└── routers/
+    └── patients.py    # all patient endpoints
+```
